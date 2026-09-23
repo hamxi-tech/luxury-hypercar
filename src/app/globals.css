@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+/*
+  One theme, locked. The page is a night that turns into a morning, and the
+  interface is the part that stays dark the whole way through so the light in
+  the scene is the only thing that changes.
+*/
+:root {
+  --graphite: #0b0d11;
+  --graphite-2: #12151b;
+  --graphite-3: #1a1e26;
+  --line: rgba(236, 234, 228, 0.12);
+  --line-strong: rgba(236, 234, 228, 0.28);
+  --ivory: #eceae4;
+  --ivory-dim: rgba(236, 234, 228, 0.62);
+  --ivory-faint: rgba(236, 234, 228, 0.38);
+  --ice: #9fc4dc;
+  --ice-deep: #5f8ba6;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-graphite: var(--graphite);
+  --color-graphite-2: var(--graphite-2);
+  --color-graphite-3: var(--graphite-3);
+  --color-ivory: var(--ivory);
+  --color-ivory-dim: var(--ivory-dim);
+  --color-ivory-faint: var(--ivory-faint);
+  --color-ice: var(--ice);
+  --color-ice-deep: var(--ice-deep);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --font-display: var(--font-anybody);
+  --font-sans: var(--font-familjen);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  background: var(--graphite);
+  color: var(--ivory);
+  scroll-behavior: auto;
+}
+
+body {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+/* Display type: an extended grotesque, set light. Weight and width carry the
+   personality so the size never has to shout. */
+.display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-variation-settings: "wdth" 130, "wght" 300;
+  letter-spacing: 0.01em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+.display-wide {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-variation-settings: "wdth" 150, "wght" 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--ice);
+  color: var(--graphite);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ice);
+  outline-offset: 3px;
+}
+
+/* Lenis */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+/* Buttons share one shape system: sharp corners, one line weight. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  height: 3.25rem;
+  padding: 0 1.75rem;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition:
+    background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.15s ease;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn-primary {
+  background: var(--ivory);
+  color: var(--graphite);
+}
+.btn-primary:hover {
+  background: var(--ice);
+}
+.btn-ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--ivory);
+}
+.btn-ghost:hover {
+  border-color: var(--ivory);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Loading: the two points of light, breathing. */
+@keyframes loader-breathe {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+.loader-dot {
+  animation: loader-breathe 1.2s ease-in-out infinite;
+}
+
+/* Captions are positioned by the chapter, hidden until their window. */
+[data-at] {
+  opacity: 0;
+  visibility: hidden;
+  will-change: opacity, transform;
+}
+
+/* A quiet scrim so type stays legible over the brighter daylight shots. */
+.scrim-left {
+  background: linear-gradient(90deg, rgba(11, 13, 17, 0.72) 0%, rgba(11, 13, 17, 0.35) 45%, rgba(11, 13, 17, 0) 75%);
+}
+.scrim-bottom {
+  background: linear-gradient(0deg, rgba(11, 13, 17, 0.8) 0%, rgba(11, 13, 17, 0.3) 40%, rgba(11, 13, 17, 0) 70%);
+}
+
+.swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid var(--line);
+  transition: border-color 0.2s ease, transform 0.15s ease;
+}
+.swatch[aria-pressed="true"] {
+  border-color: var(--ivory);
+}
+.swatch:active {
+  transform: scale(0.96);
+}
+.swatch > span {
+  display: block;
+  width: 1.9rem;
+  height: 1.9rem;
+}
