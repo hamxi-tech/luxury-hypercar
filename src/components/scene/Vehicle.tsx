@@ -47,6 +47,8 @@ interface Catalogue {
   rim: THREE.MeshStandardMaterial;
 }
 
+const spinQuat = new THREE.Quaternion();
+
 const EXPLODE: Record<string, [number, number, number]> = {
   BodyHood: [0, 0.22, 0.5],
   BodyRoofPanel: [0, 0.55, 0],
@@ -184,6 +186,40 @@ function reorganise(root: THREE.Group, budget: { transmission: boolean }): Catal
     root.add(g);
     g.attach(node);
     g.userData.side = g.position.x > 0 ? 1 : -1;
+
+    /*
+      The front wheels are modelled with a steering angle, so their axle is not
+      the car's side-to-side axis. Spinning them around that axis would wobble
+      them like a bent rim. The axle is read from the wheel's own geometry: the
+      tyre's shortest extent, measured in the wheel node's frame.
+    */
+    const box = new THREE.Box3();
+    const childBox = new THREE.Box3();
+    node.updateMatrixWorld(true);
+    node.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      o.geometry.computeBoundingBox();
+      childBox.copy(o.geometry.boundingBox!);
+      // Child transform relative to the wheel node.
+      const rel = new THREE.Matrix4().copy(node.matrixWorld).invert().multiply(o.matrixWorld);
+      childBox.applyMatrix4(rel);
+      box.union(childBox);
+    });
+    const ext = box.getSize(new THREE.Vector3());
+    const axis = ext.x <= ext.y && ext.x <= ext.z ? 0 : ext.y <= ext.z ? 1 : 2;
+    const axle = new THREE.Vector3();
+    axle.setComponent(axis, 1);
+    // Point the axle toward the car's +X so every wheel rolls the same way.
+    const world = axle.clone().applyQuaternion(node.quaternion);
+    if (world.x < 0) axle.negate();
+    world.copy(axle).applyQuaternion(node.quaternion);
+    // The file ships the front wheels turned about 30 degrees. Straighten every
+    // wheel so its axle lies across the car; the spin group is world-aligned so a
+    // yaw about its origin keeps the wheel centred in its arch.
+    const yaw = Math.atan2(world.z, world.x);
+    node.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
+    node.userData.axle = axle;
+    node.userData.rest = node.quaternion.clone();
     wheels.push(g);
   }
 
@@ -363,7 +399,12 @@ export function Vehicle({
 
     // Wheels spin with the speed value and step outward with the explode.
     for (const w of catalogue.wheels) {
-      w.rotation.x = live.wheelSpin;
+      const node = w.children[0];
+      if (node?.userData.axle) {
+        // Roll about the wheel's own axle, in its own frame, on top of its rest pose.
+        spinQuat.setFromAxisAngle(node.userData.axle as THREE.Vector3, live.wheelSpin);
+        node.quaternion.copy(node.userData.rest as THREE.Quaternion).multiply(spinQuat);
+      }
       if (w.userData.baseX === undefined) {
         w.userData.baseX = w.position.x;
         w.userData.baseY = w.position.y;
