@@ -63,12 +63,22 @@ chapter) and fade in and out inside it, so the words and the shot arrive togethe
 
 ## Performance
 
-- Model: Draco + WebP, 1.56 MB. Decoder served from `/draco/`.
-- Tiers (`src/lib/device.ts`): pixel-ratio clamp 1.25 / 1.5 / 1.75; refraction
-  and reflective floor on high only; shadows off on low; pointer lighting off on
-  touch devices.
+- Two model builds, Draco + WebP: `aubade.glb` (148k triangles, 1.3 MB) for
+  desktop, `aubade-lite.glb` (117k, 1.0 MB) for touch devices. Painted panels are
+  never simplified; wipers, rims and interior parts are. Preloaded from the HTML
+  head with a media query. Decoder served from `/draco/`.
+- Tiers (`src/lib/device.ts`) are chosen from the GPU renderer string: discrete
+  GPUs get refraction, reflective floor and contact shadow (pixel ratio 1.5);
+  integrated GPUs get shadows only (1.25) with adaptive resolution during motion;
+  phones get the lighter model, no shadows, no pointer lighting.
+- Environment lighting is baked into fourteen keyframes at load and blended in the
+  shader (`envBlend.ts`); nothing re-bakes during scroll.
+- Every shader variant (x-ray transparency, refraction off, flake off) is compiled
+  with `compileAsync` behind the loading screen and during the reveal, so no
+  program compiles mid-scroll.
 - On-demand render loop. Idle is zero draw calls (measured by wrapping the WebGL
-  context; the dev build exposes `window.__aubade` for this).
+  context; the dev build exposes `window.__aubade` and `window.__aubadeFlags`,
+  which switch individual passes off for A/B profiling).
 - Crawlers, Lighthouse and devices without WebGL receive `public/poster.webp`
   and never download three.js.
 - `prefers-reduced-motion`: smooth scroll off, intro jumps to its end, captions

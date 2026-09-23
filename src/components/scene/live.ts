@@ -64,7 +64,7 @@ export const live: Live = {
 const tmp = new THREE.Vector3();
 
 /** Ease every live value toward its target; returns true if anything still moves. */
-export function step(target: Targets, dt: number, pointer: { x: number; y: number }, lambda = 4) {
+export function step(target: Targets, dt: number, pointer: { x: number; y: number }, lambda = 6) {
   // Capped so a tab that was hidden for a minute does not jump, but generous
   // enough that a throttled background tab (1 frame a second) still settles.
   const d = Math.min(dt, 0.5);

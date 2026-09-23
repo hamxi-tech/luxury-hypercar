@@ -1,6 +1,6 @@
 # Assets and licences
 
-## Vehicle model: `public/models/aubade.glb`
+## Vehicle model: `public/models/aubade.glb` and `aubade-lite.glb`
 
 - **Source:** Khronos Group glTF Sample Assets, `Models/CarConcept`
   (https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept).
@@ -15,7 +15,10 @@
 - **Preparation (scratch script, not in the repo):** removed the two trademark nodes,
   dropped the `KHR_materials_variants` paint variants (paint is set at runtime),
   removed the unused Pearl/Graphite materials, re-encoded textures as WebP at a 1024 px
-  cap, then Draco-compressed. 11.8 MB became 1.56 MB.
+  cap, then simplified per part with meshoptimizer (painted and glazed panels untouched;
+  wipers, rims, interior and small parts reduced) and Draco-compressed.
+  - `aubade.glb`: desktop build, 148k triangles, 1.29 MB (original 213k, 11.8 MB).
+  - `aubade-lite.glb`: touch-device build, 117k triangles, 512 px textures, 1.01 MB.
 - **Runtime:** every material is replaced in `src/components/scene/Vehicle.tsx`; only
   geometry, UVs and the baked occlusion and normal maps come from the file.
 

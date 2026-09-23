@@ -50,6 +50,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${anybody.variable} ${familjen.variable} ${geistMono.variable} lenis`}
     >
+      <head>
+        {/* The car starts downloading with the HTML instead of after the three.js chunk. */}
+        <link rel="preload" href="/models/aubade.glb" as="fetch" crossOrigin="anonymous" media="(pointer: fine)" />
+        <link rel="preload" href="/models/aubade-lite.glb" as="fetch" crossOrigin="anonymous" media="(pointer: coarse)" />
+        <link rel="preload" href="/draco/draco_decoder.wasm" as="fetch" crossOrigin="anonymous" />
+      </head>
       <body className="min-h-full bg-graphite text-ivory">{children}</body>
     </html>
   );

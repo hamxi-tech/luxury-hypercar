@@ -2,11 +2,13 @@
 "use no memo";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { live } from "./live";
 import { getConfig, INTERIORS, PAINTS, subscribeConfig, WHEELS } from "@/lib/store";
+import { flags } from "@/lib/debug";
+import { patchEnvBlend } from "./envBlend";
 
 /*
   The vehicle is a licensed concept-car model (see docs/ASSETS.md) with every
@@ -20,8 +22,7 @@ import { getConfig, INTERIORS, PAINTS, subscribeConfig, WHEELS } from "@/lib/sto
   reach them without walking the tree again.
 */
 
-const MODEL = "/models/aubade.glb";
-useGLTF.preload(MODEL, "/draco/");
+export const MODELS = { full: "/models/aubade.glb", lite: "/models/aubade-lite.glb" } as const;
 
 type Part = {
   group: THREE.Group;
@@ -198,6 +199,8 @@ function reorganise(root: THREE.Group, budget: { transmission: boolean }): Catal
   }
 
   const fadeMaterials = Array.from(new Set(Object.values(replace)));
+  // Every lit material blends between two baked environments (see envBlend.ts).
+  for (const m of fadeMaterials) patchEnvBlend(m);
 
   return {
     wheels,
@@ -218,13 +221,16 @@ function reorganise(root: THREE.Group, budget: { transmission: boolean }): Catal
 }
 
 export function Vehicle({
+  model: modelKey,
   transmission,
   onReady,
 }: {
+  model: keyof typeof MODELS;
   transmission: boolean;
   onReady?: () => void;
 }) {
-  const gltf = useGLTF(MODEL, "/draco/");
+  const gltf = useGLTF(MODELS[modelKey], "/draco/");
+  const { gl, scene, camera } = useThree();
   const group = useRef<THREE.Group>(null);
   const model = useMemo(() => gltf.scene, [gltf.scene]);
   // Reorganising is done once per loaded model and cached on it. React runs
@@ -285,12 +291,66 @@ export function Vehicle({
   }, [applyConfig]);
 
 
+  /*
+    Shader warm-up. three.js keys its program cache on state that changes
+    during the story (transparency for the x-ray, refraction on or off, the
+    flake normal map on or off), and a compile mid-scroll is a visible stall.
+    Every variant is compiled here, behind the loading screen, without
+    blocking the main thread.
+  */
   useEffect(() => {
     applyConfig();
     const unsubscribe = subscribeConfig(applyConfig);
-    onReady?.();
-    return unsubscribe;
-  }, [applyConfig, onReady]);
+    let cancelled = false;
+
+    const warm = async () => {
+      const mats = catalogue.fadeMaterials;
+      const compile = () => gl.compileAsync(scene, camera);
+      try {
+        // The base state is compiled before the curtain lifts, with the hidden
+        // intelligence map made visible so its materials are included.
+        const hidden: THREE.Object3D[] = [];
+        scene.traverse((o) => {
+          if (!o.visible) {
+            hidden.push(o);
+            o.visible = true;
+          }
+        });
+        await compile();
+        for (const o of hidden) o.visible = false;
+        if (!cancelled) onReady?.();
+
+        // The variants compile while the reveal plays; the compile itself runs in
+        // parallel on the GPU process and never blocks a frame here.
+        for (const m of mats) {
+          m.transparent = true;
+          m.needsUpdate = true;
+        }
+        if (transmission) catalogue.glass.transmission = 0;
+        await compile();
+        const flake = catalogue.paint.normalMap;
+        catalogue.paint.normalMap = flake ? null : flakeMap.current;
+        catalogue.paint.needsUpdate = true;
+        await compile();
+        catalogue.paint.normalMap = flake;
+        for (const m of mats) {
+          m.transparent = m === catalogue.glass && !transmission;
+          m.needsUpdate = true;
+        }
+        if (transmission) catalogue.glass.transmission = 0.92;
+        catalogue.paint.needsUpdate = true;
+      } catch {
+        // A failed warm-up only costs a later hitch; the scene still works.
+        if (!cancelled) onReady?.();
+      }
+    };
+    warm();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [applyConfig, onReady, catalogue, gl, scene, camera, transmission]);
 
   useEffect(() => {
     if (catalogue.doorL) doorRest.current = catalogue.doorL.rotation.z;
@@ -331,7 +391,7 @@ export function Vehicle({
     }
     // Refraction ignores opacity, so the glass has to give up its transmission
     // for the x-ray and take it back afterwards.
-    if (transmission) catalogue.glass.transmission = 0.92 * (1 - x);
+    if (transmission) catalogue.glass.transmission = flags.noTransmission ? 0 : 0.92 * (1 - x);
 
     catalogue.headlight.emissiveIntensity = live.headlights * 9;
     catalogue.brakelight.emissiveIntensity = 0.4 + live.headlights * 2.2 + live.speed * 1.5;

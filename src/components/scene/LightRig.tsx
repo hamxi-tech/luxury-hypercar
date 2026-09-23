@@ -5,14 +5,21 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { live } from "./live";
+import { envBlend } from "./envBlend";
+import { flags } from "@/lib/debug";
 
 /*
   The environment is a small studio built from emissive panels, baked to a
   PMREM map. It is not an HDRI because it has to move: the visitor scrolls the
-  night into a morning, and every panel's colour and the sky gradient are
-  interpolated between three states and re-baked only when they have changed
-  enough to be seen. Real lights sit alongside it for the shadows and for the
-  headlamps, which are the one thing an environment map cannot do.
+  night into a morning. Every panel's colour and the sky gradient are
+  interpolated between three states.
+
+  Baking is expensive on an integrated GPU (tens of milliseconds), so it never
+  happens while the visitor scrolls. A fixed set of keyframes is baked once,
+  the four the reveal needs first and the rest spread over the following
+  frames, and from then on each frame blends the two keyframes that bracket
+  the current moment (see envBlend.ts). Real lights sit alongside for the
+  shadows and the headlamps, which an environment map cannot do.
 
   Three states, in order of appearance:
     night: a dark hall, one long cool softbox overhead, a warm practical behind
@@ -163,7 +170,6 @@ const SKY_SHADER = {
     void main() {
       float y = vDir.y;
       vec3 c = y > 0.0 ? mix(horizon, top, pow(y, 0.6)) : mix(horizon, ground, pow(-y, 0.5));
-      // First light sits low on the horizon, strongest in front of the car.
       float band = exp(-abs(y) * 14.0);
       float front = 0.55 + 0.45 * max(0.0, vDir.z);
       c += glow * glowPower * band * front;
@@ -172,12 +178,33 @@ const SKY_SHADER = {
   `,
 };
 
-export function LightRig({ resolution, shadowMapSize }: { resolution: number; shadowMapSize: number }) {
+/*
+  Keyframes. The reveal runs rig 0..1 at daylight 0; everything after runs
+  daylight 0..1 at rig 1. The first four are baked before the curtain lifts.
+*/
+const RIG_STEPS = [0, 0.35, 0.7];
+const DAY_STEPS = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+
+interface Keyframe {
+  daylight: number;
+  rig: number;
+  texture: THREE.Texture | null;
+}
+
+export function LightRig({ shadowMapSize }: { shadowMapSize: number }) {
   const { gl, scene } = useThree();
   const key = useRef<THREE.DirectionalLight>(null);
   const fill = useRef<THREE.HemisphereLight>(null);
-  const baked = useRef({ daylight: -1, rig: -1 });
   const fogColor = useMemo(() => new THREE.Color(), []);
+  const lastBake = useRef(0);
+
+  const keyframes = useMemo<Keyframe[]>(
+    () => [
+      ...RIG_STEPS.map((rig) => ({ daylight: 0, rig, texture: null })),
+      ...DAY_STEPS.map((daylight) => ({ daylight, rig: 1, texture: null })),
+    ],
+    [],
+  );
 
   const virtual = useMemo(() => {
     const s = new THREE.Scene();
@@ -191,13 +218,11 @@ export function LightRig({ resolution, shadowMapSize }: { resolution: number; sh
     const panel = (w: number, h: number) =>
       new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
 
-    // One long softbox above, along the length of the car.
     const softbox = panel(1.6, 9);
     softbox.position.set(0, 4.2, 0.3);
     softbox.rotation.x = Math.PI / 2;
     s.add(softbox);
 
-    // Two tall strips either side, slightly behind the camera's usual position.
     const sideL = panel(0.5, 7);
     sideL.position.set(6.5, 1.6, 1);
     sideL.rotation.y = -Math.PI / 2;
@@ -208,7 +233,6 @@ export function LightRig({ resolution, shadowMapSize }: { resolution: number; sh
     sideR.rotation.y = Math.PI / 2;
     s.add(sideR);
 
-    // A warm practical low behind the car: the one warm note at night.
     const practical = new THREE.Mesh(new THREE.CircleGeometry(0.7, 24), new THREE.MeshBasicMaterial());
     practical.position.set(-3, 0.9, -7);
     practical.lookAt(0, 0.6, 0);
@@ -218,51 +242,87 @@ export function LightRig({ resolution, shadowMapSize }: { resolution: number; sh
   }, []);
 
   const pmrem = useMemo(() => new THREE.PMREMGenerator(gl), [gl]);
+
+  const bake = (k: Keyframe) => {
+    const s = stateAt(k.daylight, k.rig);
+    const u = (virtual.sky.material as THREE.ShaderMaterial).uniforms;
+    u.top.value.setRGB(...s.skyTop);
+    u.horizon.value.setRGB(...s.skyHorizon);
+    u.ground.value.setRGB(...s.ground);
+    u.glow.value.setRGB(...s.horizonGlow);
+    u.glowPower.value = s.horizonGlowPower;
+    (virtual.softbox.material as THREE.MeshBasicMaterial).color.setRGB(...s.softbox).multiplyScalar(s.softboxPower);
+    (virtual.sideL.material as THREE.MeshBasicMaterial).color.setRGB(...s.side).multiplyScalar(s.sidePower);
+    (virtual.sideR.material as THREE.MeshBasicMaterial).color.setRGB(...s.side).multiplyScalar(s.sidePower);
+    (virtual.practical.material as THREE.MeshBasicMaterial).color
+      .setRGB(...s.practical)
+      .multiplyScalar(s.practicalPower);
+    k.texture = pmrem.fromScene(virtual.scene, 0, 0.1, 100).texture;
+  };
+
   useEffect(() => {
     pmrem.compileEquirectangularShader();
+    // The reveal's keyframes, before anything is drawn.
+    for (let i = 0; i < 4; i++) if (!keyframes[i].texture) bake(keyframes[i]);
     return () => {
       pmrem.dispose();
-      scene.environment?.dispose();
+      for (const k of keyframes) {
+        k.texture?.dispose();
+        k.texture = null;
+      }
       scene.environment = null;
+      envBlend.mapB = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pmrem, scene]);
+
+  /** The two keyframes bracketing the current moment, and the mix between them. */
+  const bracket = (daylight: number, rig: number): [Keyframe, Keyframe, number] => {
+    if (rig < 0.999) {
+      const steps = [...RIG_STEPS, 1];
+      let i = 0;
+      while (i < steps.length - 2 && rig > steps[i + 1]) i++;
+      const t = (rig - steps[i]) / (steps[i + 1] - steps[i]);
+      const a = keyframes[i];
+      const b = i + 1 < RIG_STEPS.length ? keyframes[i + 1] : keyframes[RIG_STEPS.length];
+      return [a, b, THREE.MathUtils.clamp(t, 0, 1)];
+    }
+    const base = RIG_STEPS.length;
+    let i = 0;
+    while (i < DAY_STEPS.length - 2 && daylight > DAY_STEPS[i + 1]) i++;
+    const t = (daylight - DAY_STEPS[i]) / (DAY_STEPS[i + 1] - DAY_STEPS[i]);
+    return [keyframes[base + i], keyframes[base + i + 1], THREE.MathUtils.clamp(t, 0, 1)];
+  };
 
   useFrame(() => {
     const { daylight, rig } = live;
-    const changed =
-      Math.abs(daylight - baked.current.daylight) > 0.006 || Math.abs(rig - baked.current.rig) > 0.01;
-    const s = stateAt(daylight, rig);
+    const now = performance.now();
 
-    if (changed) {
-      baked.current = { daylight, rig };
-      const u = (virtual.sky.material as THREE.ShaderMaterial).uniforms;
-      u.top.value.setRGB(...s.skyTop);
-      u.horizon.value.setRGB(...s.skyHorizon);
-      u.ground.value.setRGB(...s.ground);
-      u.glow.value.setRGB(...s.horizonGlow);
-      u.glowPower.value = s.horizonGlowPower;
-      (virtual.softbox.material as THREE.MeshBasicMaterial).color.setRGB(...s.softbox).multiplyScalar(s.softboxPower);
-      (virtual.sideL.material as THREE.MeshBasicMaterial).color.setRGB(...s.side).multiplyScalar(s.sidePower);
-      (virtual.sideR.material as THREE.MeshBasicMaterial).color.setRGB(...s.side).multiplyScalar(s.sidePower);
-      (virtual.practical.material as THREE.MeshBasicMaterial).color
-        .setRGB(...s.practical)
-        .multiplyScalar(s.practicalPower);
-
-      const previous = scene.environment;
-      const target = pmrem.fromScene(virtual.scene, 0, 0.1, 100);
-      scene.environment = target.texture;
-      previous?.dispose();
+    // Bake the remaining keyframes one at a time, spaced out, while the reveal plays.
+    if (!flags.noBake && now - lastBake.current > 140) {
+      const next = keyframes.find((k) => !k.texture);
+      if (next) {
+        bake(next);
+        lastBake.current = now;
+      }
     }
 
-    // The real lights follow the same states every frame; they are cheap.
+    const [a, b, t] = bracket(daylight, rig);
+    // Fall back to whichever neighbour exists if a keyframe is not baked yet.
+    const texA = a.texture ?? b.texture;
+    const texB = b.texture ?? a.texture;
+    if (texA && scene.environment !== texA) scene.environment = texA;
+    envBlend.mapB = texB && texB !== texA ? texB : null;
+    envBlend.mix = t;
+
+    const s = stateAt(daylight, rig);
     fogColor.setRGB(...s.fog);
     (scene.fog as THREE.Fog | null)?.color.copy(fogColor);
     (scene.background as THREE.Color | null)?.copy(fogColor);
     if (key.current) {
+      if (shadowMapSize > 0) key.current.castShadow = !flags.noShadow;
       key.current.color.setRGB(...s.keyColor);
       key.current.intensity = s.keyPower;
-      // The key light swings from a high cool overhead at night to a low warm
-      // front-side light at dawn, and back up for day.
       const dawn = 1 - Math.abs(daylight - 0.5) * 2;
       key.current.position.set(3 + dawn * 3, 6 - dawn * 4.8, 4 + dawn * 4);
     }
@@ -276,7 +336,7 @@ export function LightRig({ resolution, shadowMapSize }: { resolution: number; sh
         position={[3, 6, 4]}
         intensity={1.4}
         castShadow={shadowMapSize > 0}
-        shadow-mapSize={[shadowMapSize, shadowMapSize]}
+        shadow-mapSize={[shadowMapSize || 1, shadowMapSize || 1]}
         shadow-bias={-0.0004}
         shadow-normalBias={0.02}
         shadow-camera-left={-4}
@@ -289,8 +349,6 @@ export function LightRig({ resolution, shadowMapSize }: { resolution: number; sh
       <hemisphereLight ref={fill} args={["#b8c4d2", "#0b0d11", 0.08]} />
       <fog attach="fog" args={["#0b0d11", 9, 34]} />
       <color attach="background" args={["#0b0d11"]} />
-      {/* The resolution prop is applied when the rig is created, so it is read once. */}
-      <group userData={{ resolution }} />
     </>
   );
 }

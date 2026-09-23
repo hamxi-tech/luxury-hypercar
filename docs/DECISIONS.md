@@ -90,6 +90,52 @@ landscape. On a phone the director stands further back for exterior shots (up to
 1.85x the distance) and opens the lens for the cockpit, where there is no room to
 step back, so the composition survives instead of being cut off at the fenders.
 
+## Performance pass (2026-09-24)
+
+Measured on an Intel UHD 630 laptop GPU at 1440x900, production build, scripted
+scroll through the whole page. Before: 19.7 fps average, 95th percentile frame
+200 ms, worst 734 ms, first frame at 3.0 s. The median frame was already 16.7 ms;
+the problem was stalls, not steady load. Each suspect was switched off in turn
+with a dev-only flag set and profiled separately.
+
+**What was actually slow, in order.**
+1. Refraction. The glass's transmission pass re-renders the scene into a
+   full-size buffer with mipmaps every frame. Turning it off alone took the 95th
+   percentile from 200 ms to 67 ms. It is now reserved for discrete GPUs.
+2. Shader compiles mid-scroll. three.js keys its program cache on transparency,
+   so the x-ray's fade compiled twenty new shaders while the visitor scrolled
+   (programs went from 50 to 65 during one scroll). Every variant is now compiled
+   with compileAsync: the base state behind the loading screen, the rest during
+   the reveal, in parallel, without blocking a frame.
+3. Environment re-bakes. The light rig re-baked its PMREM map on almost every
+   frame of a daylight transition. Fourteen keyframes are baked once at load and
+   blended in the shader by a small patch to the physical material (envBlend.ts),
+   so the scroll never bakes.
+4. Geometry. The model drew 213k triangles per pass, three passes per frame. The
+   wipers alone were 24k. Small parts are simplified with meshoptimizer; painted
+   and glazed panels are untouched, because clear-coat reflections expose every
+   facet (a first attempt at 75 percent on the body faceted the fenders).
+   Desktop build 148k triangles, phone build 117k.
+5. Extra passes. Contact shadow and reflective floor are now high-tier only.
+
+**Tiering reads the GPU.** Pointer type and core count could not tell an Intel
+UHD from an RTX. The renderer string can, so the tier is chosen from it: discrete
+GPUs get refraction, reflection and contact shadows; integrated GPUs get shadows
+only; phones get the lighter model and no shadows. Apple silicon desktops count as
+capable.
+
+**Resolution scales during motion.** On integrated tiers, frames over 24 ms while
+the camera moves lower the render scale a step at a time (floor 0.75), and the
+full resolution returns a quarter second after the scene settles. Every still
+frame is full quality.
+
+**Scroll coupling.** Lenis smoothing shortened from 1.1 s to 0.85 s and the
+camera follow raised from lambda 4 to 6, so the picture answers the wheel sooner.
+
+**Loading.** The model is preloaded from the HTML head (with a media query so
+phones fetch the lighter build), so it downloads alongside the JavaScript rather
+than after it.
+
 ## Things that changed during the build
 
 - **Background-throttled tabs.** The first idle measurement showed the loop never

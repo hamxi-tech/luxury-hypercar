@@ -21,11 +21,11 @@ const BLOCKS = [
   },
   {
     title: "Light that moves with the story",
-    body: "There is no HDRI. The environment is a small studio of emissive panels and a sky gradient, blended between night, dawn and day as the visitor scrolls, and re-baked into a reflection map only when it has changed enough to see. The page is one long morning.",
+    body: "There is no HDRI. The environment is a small studio of emissive panels and a sky gradient, baked into fourteen reflection maps at load and blended in the shader as the visitor scrolls, so nothing is re-baked mid-story. The page is one long morning.",
   },
   {
     title: "Fast where it counts",
-    body: "The model is Draco-compressed to 1.6 MB with WebP textures. The device is tiered once at load: pixel ratio is clamped, refraction, shadows and the reflective floor are switched by tier, and the render loop draws a frame only while something is changing. A page left open costs nothing.",
+    body: "The model ships in two builds, 1 MB for desktop and 0.7 MB for phones, Draco-compressed with WebP textures. The device is tiered once at load from its GPU: pixel ratio is clamped, refraction, shadows and the reflective floor are switched by tier, every shader variant is compiled behind the loading screen, and the render loop draws a frame only while something is changing.",
   },
 ];
 

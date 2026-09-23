@@ -7,6 +7,7 @@ import { Line } from "@react-three/drei";
 import * as THREE from "three";
 import type { Line2 } from "three-stdlib";
 import { live } from "./live";
+import { flags } from "@/lib/debug";
 
 /*
   The intelligence map: what is inside the car when the body fades. It is a
@@ -136,7 +137,7 @@ export function Intelligence() {
 
   useFrame(() => {
     const x = live.xray;
-    if (group.current) group.current.visible = x > 0.01;
+    if (group.current) group.current.visible = x > 0.01 && !flags.noLines;
     if (x <= 0.01) return;
 
     const stage = live.stage;

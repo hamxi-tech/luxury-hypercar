@@ -3,7 +3,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Canvas, invalidate, useFrame, useThree } from "@react-three/fiber";
-import { ContactShadows, MeshReflectorMaterial, Preload } from "@react-three/drei";
+import { ContactShadows, MeshReflectorMaterial } from "@react-three/drei";
 import * as THREE from "three";
 import { LightRig, stateAt } from "./LightRig";
 import { Vehicle } from "./Vehicle";
@@ -13,6 +13,7 @@ import { targets } from "./director";
 import { live, step } from "./live";
 import { frame, setChapter, subscribeFrame } from "@/lib/store";
 import { budget as readBudget } from "@/lib/device";
+import { flags } from "@/lib/debug";
 
 /*
   One canvas for the whole page. The page scrolls over it, chapters write
@@ -24,9 +25,22 @@ import { budget as readBudget } from "@/lib/device";
 const pointer = { x: 0, y: 0 };
 const debug = { calls: 0, early: 0, steps: 0, lastDt: 0 };
 
-function Director({ maxFps, pointerLighting }: { maxFps: number; pointerLighting: boolean }) {
-  const { camera, invalidate: inv, size } = useThree();
+function Director({
+  maxFps,
+  pointerLighting,
+  adaptive,
+  baseDpr,
+}: {
+  maxFps: number;
+  pointerLighting: boolean;
+  adaptive: boolean;
+  baseDpr: number;
+}) {
+  const { camera, invalidate: inv, size, setDpr } = useThree();
   const lastDraw = useRef(0);
+  const frameCost = useRef(16);
+  const scale = useRef(1);
+  const settledAt = useRef(0);
   const spacing = 1000 / maxFps;
   const up = new THREE.Vector3(0, 1, 0);
   const offset = useRef(new THREE.Vector3());
@@ -86,6 +100,35 @@ function Director({ maxFps, pointerLighting }: { maxFps: number; pointerLighting
       cam.updateProjectionMatrix();
     }
 
+    /*
+      Adaptive resolution. While the camera is moving, frames that run long
+      lower the render scale a step at a time; once the scene has settled for
+      a moment the full resolution returns. Runs after the step so it sees the
+      frame that settles, and keeps the loop alive until it has restored. The visitor sees motion at a
+      slightly softer resolution and every still frame at full quality.
+    */
+    if (adaptive) {
+      const ms = Math.min(dt * 1000, 100);
+      frameCost.current += (ms - frameCost.current) * 0.15;
+      if (moving) {
+        settledAt.current = 0;
+        // Large viewports may step lower: at 1920 wide a 0.7 scale is still 1344 px.
+        const floor = size.width >= 1800 ? 0.7 : 0.75;
+        if (frameCost.current > 22 && scale.current > floor) {
+          scale.current = Math.max(floor, scale.current - 0.125);
+          frameCost.current = 16;
+          setDpr(baseDpr * scale.current);
+        }
+      } else if (scale.current < 1) {
+        if (!settledAt.current) settledAt.current = now;
+        if (now - settledAt.current > 250) {
+          scale.current = 1;
+          setDpr(baseDpr);
+        }
+        inv();
+      }
+    }
+
     if (moving) inv();
   }, -1);
 
@@ -103,22 +146,25 @@ function DevProbe() {
   return null;
 }
 
-function Floor({ reflective }: { reflective: boolean }) {
+function Floor({ reflective, contact }: { reflective: boolean; contact: boolean }) {
   const material = useRef<THREE.MeshStandardMaterial>(null);
   const shadow = useRef<THREE.Group>(null);
+  const floor = useRef<THREE.Mesh>(null);
   useFrame(() => {
     const s = stateAt(live.daylight, live.rig);
     material.current?.color.setRGB(...s.floor);
+    if (floor.current) floor.current.visible = !flags.noReflector;
+    if (shadow.current) shadow.current.visible = !flags.noContact;
   });
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, 0]} receiveShadow>
+      <mesh ref={floor} rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, 0]} receiveShadow>
         <circleGeometry args={[60, 64]} />
         {reflective ? (
           <MeshReflectorMaterial
             ref={material as never}
-            resolution={1024}
-            blur={[400, 120]}
+            resolution={512}
+            blur={[300, 100]}
             mixBlur={1}
             mixStrength={1.0}
             mixContrast={1}
@@ -134,7 +180,7 @@ function Floor({ reflective }: { reflective: boolean }) {
           <meshStandardMaterial ref={material} color="#0c0e12" roughness={0.55} metalness={0.15} envMapIntensity={0.7} />
         )}
       </mesh>
-      <group ref={shadow}>
+      <group ref={shadow} visible={contact}>
         <ContactShadows
           position={[0, 0.002, 0.25]}
           scale={[7, 7]}
@@ -142,7 +188,7 @@ function Floor({ reflective }: { reflective: boolean }) {
           opacity={0.75}
           far={1.2}
           resolution={512}
-          frames={Infinity}
+          frames={contact ? Infinity : 1}
           color="#04050a"
         />
       </group>
@@ -190,17 +236,21 @@ export default function Scene({ onReady }: { onReady: () => void }) {
       eventSource={typeof document !== "undefined" ? document.body : undefined}
       eventPrefix="client"
     >
-      <Director maxFps={budget.maxFps} pointerLighting={budget.pointerLighting} />
+      <Director
+        maxFps={budget.maxFps}
+        pointerLighting={budget.pointerLighting}
+        adaptive={budget.adaptiveResolution}
+        baseDpr={Math.min(budget.dpr[1], typeof window === "undefined" ? 1 : window.devicePixelRatio)}
+      />
       <DevProbe />
       <Pointer enabled={budget.pointerLighting} />
-      <LightRig resolution={budget.environmentResolution} shadowMapSize={budget.shadowMapSize} />
+      <LightRig shadowMapSize={budget.shadowMapSize} />
       <Suspense fallback={null}>
-        <Vehicle transmission={budget.tier === "high"} onReady={() => setReady(true)} />
+        <Vehicle model={budget.model} transmission={budget.transmission} onReady={() => setReady(true)} />
         <Intelligence />
-        <Preload all />
       </Suspense>
       <Speed />
-      <Floor reflective={budget.floorReflection} />
+      <Floor reflective={budget.floorReflection} contact={budget.contactShadow} />
     </Canvas>
   );
 }
